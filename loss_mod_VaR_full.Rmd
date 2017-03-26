@@ -1,0 +1,567 @@
+---
+title: "Loss Given Default + VaR"
+author: "Daniel Bereket"
+date: "3/22/2017"
+output: pdf_document
+---
+
+# Loss Given Default
+
+```{r}
+library(tree)
+library(randomForest)
+library(splines)
+library(dplyr)
+
+## DATA DOWNLOAD & CLEANING
+
+# Getting original data for Charge-off Amounts
+df <- read.csv('SBA_cleaned_data.csv')
+chg_vals <- select(df, GrossChargeOffAmount)
+chg_vals$loanNum <- c(1:nrow(df))
+
+
+
+## Set up loss training set
+loss_train <- read.csv('training_set.csv')
+loss_train <- loss_train[loss_train$isDefault==1,]
+
+# Cleaning NA values for training set
+loss_train <- loss_train[!is.na(loss_train$interestRate),]
+loss_train <- loss_train[!is.na(loss_train$unemploymentRate),]
+loss_train <- loss_train[!is.na(loss_train$hpiState),]
+loss_train <- loss_train[!is.na(loss_train$tedSpread),]
+loss_train <- loss_train[!is.na(loss_train$sandp500),]
+loss_train <- loss_train[!is.na(loss_train$TermInMonths),]
+
+# Merging Charge-off Amounts for training set
+loss_train <- left_join(loss_train, chg_vals, by="loanNum") # adding charge off values
+
+# Creating loss ratios
+loss_train$LossRatio <- loss_train$GrossChargeOffAmount / loss_train$GrossApproval
+
+# Removing loss ratios above 1
+loss_train <- loss_train[loss_train$LossRatio<=1,]
+
+# Log variable transformations
+loss_train$loggross <- log(loss_train$GrossApproval)
+loss_train$loghpi <- log(loss_train$hpiState)
+
+
+
+# Set up loss validation set
+loss_valid <- read.csv('validation_set.csv')
+loss_valid <- loss_valid[loss_valid$isDefault==1,]
+
+# Merging Charge-off Amounts for validation set
+loss_valid <- left_join(loss_valid, chg_vals, by="loanNum") # adding charge off values
+
+# Cleaning NA values for validation set
+loss_valid <- loss_valid[!is.na(loss_valid$interestRate),]
+loss_valid <- loss_valid[!is.na(loss_valid$unemploymentRate),]
+loss_valid <- loss_valid[!is.na(loss_valid$hpiState),]
+loss_valid <- loss_valid[!is.na(loss_valid$tedSpread),]
+loss_valid <- loss_valid[!is.na(loss_valid$sandp500),]
+loss_valid <- loss_valid[!is.na(loss_valid$TermInMonths),]
+
+
+# Creating loss ratios
+loss_valid$LossRatio <- loss_valid$GrossChargeOffAmount / loss_valid$GrossApproval
+
+# Removing loss ratios above 1
+loss_valid <- loss_valid[loss_valid$LossRatio<=1,]
+
+# Log variable transformations
+loss_valid$loggross <- log(loss_valid$GrossApproval)
+loss_valid$loghpi <- log(loss_valid$hpiState)
+
+
+
+## LOSS GIVEN DEFAULT MODELS
+
+# Linear regression (threshold)
+loss.lm <- lm(LossRatio~log(GrossApproval)+interestRate+unemploymentRate+log(hpiState)+tedSpread+sandp500+TermInMonths, data=loss_train,na.action=na.exclude)
+summary(loss.lm)
+
+lm.losspred <- predict(loss.lm, newdata=loss_valid)
+lm.mse <- mean((lm.losspred-loss_valid$LossRatio)^2)
+lm.mse
+
+# Bagging trees
+bag.tree <- randomForest(LossRatio~loggross+interestRate+unemploymentRate+loghpi+tedSpread+sandp500+TermInMonths, data=loss_train, mtry=7, ntree=90)
+summary(bag.tree)
+
+bag.losspred <- predict(bag.tree, newdata=loss_valid, type="response")
+bag.mse <- mean((bag.losspred-loss_valid$LossRatio)^2)
+bag.mse
+
+# Random forests
+rf.tree <- randomForest(GrossChargeOffAmount~loggross+interestRate+unemploymentRate+loghpi+tedSpread+sandp500+TermInMonths, data=loss_train, mtry=2, ntree=90)
+summary(bag.tree)
+
+rf.losspred <- predict(rf.tree, newdata=loss_valid, type="response")
+rf.mse <- mean((rf.losspred-loss_valid$LossRatio)^2)
+rf.mse
+
+# Regression splines
+loss.spl <- lm(LossRatio~bs(interestRate,df=3)+bs(unemploymentRate,df=3)+bs(log(hpiState),df=3)+bs(tedSpread,df=3)+bs(sandp500,df=3)+bs(TermInMonths,df=3),data=loss_train)
+
+spl.losspred <- predict(loss.spl,newdata=loss_valid)
+
+spl.mse <- mean((spl.losspred-loss_valid$LossRatio)^2)
+spl.mse
+
+```
+
+
+
+# Reading/Cleaning Test Datasets
+
+```{r}
+
+## FULL DATASET
+test500_set <- read.csv('test500_full.csv')
+
+# Reading probabilities
+def.probs <- read.csv("prob.csv") 
+names(def.probs)[2] <- "loanNum"
+def.probs <- select(def.probs, loanNum, Prob1yr, Prob5yr)
+
+# Join tables
+names(test500_set)[2] <- "loanNum"
+names(test500_set)[1] <- "loanNum1"
+test500_set <- left_join(test500_set, def.probs, by="loanNum")
+
+
+# Creating log hpi state column for test set
+test500_set$loghpi <- log(test500_set$hpiState)
+test500_set$loggross <- log(test500_set$GrossApproval)
+
+## ONE YEAR TEST DATASET
+
+test500.1 <- test500_set[test500_set$ApprovalFiscalYear==test500_set$start,]
+test500.1 <- left_join(test500.1, chg_vals, by="loanNum")
+
+# Filtering probabilites to those for one year
+def.probs.1 <- def.probs[!is.na(test500.1$interestRate),]
+def.probs.1 <- def.probs.1[!is.na(test500.1$unemploymentRate),]
+def.probs.1 <- def.probs.1[!is.na(test500.1$hpiState),]
+
+# Cleaning NA values for 1-year test set
+test500.1 <- test500.1[!is.na(test500.1$interestRate),]
+test500.1 <- test500.1[!is.na(test500.1$unemploymentRate),]
+test500.1 <- test500.1[!is.na(test500.1$hpiState),]
+test500.1 <- test500.1[!is.na(test500.1$tedSpread),]
+test500.1 <- test500.1[!is.na(test500.1$sandp500),]
+test500.1 <- test500.1[!is.na(test500.1$TermInMonths),]
+
+# Loss predictions
+test.loss.1 <- predict(bag.tree, newdata=test500.1, type="response")
+
+## FIVE YEAR TEST DATASET
+
+# Getting default events
+test500.5 <- test500_set[test500_set$start==test500_set$ApprovalFiscalYear,]
+
+# Cleaning NA values for 5-year test set
+test500.5 <- test500.5[!is.na(test500.5$interestRate),]
+test500.5 <- test500.5[!is.na(test500.5$unemploymentRate),]
+test500.5 <- test500.5[!is.na(test500.5$hpiState),]
+test500.5 <- test500.5[!is.na(test500.5$tedSpread),]
+test500.5 <- test500.5[!is.na(test500.5$sandp500),]
+test500.5 <- test500.5[!is.na(test500.5$TermInMonths),]
+
+# Setting correct default events and charge-off amounts for 5-year horizon
+
+# Getting row numbers for test set sampled from original dataset
+test.rows <- read.csv("test_loan_nos.csv")
+
+for (i in 1:nrow(test.rows)) {
+  row.v <- test.rows$loans_sampled_test[i]
+  test500.5$GrossChargeOffAmount[i] <- df$GrossChargeOffAmount[row.v]
+  
+  # Copying default event only if occurs in first 5 years
+  if (df$dayselapsed[row.v]<=1825 & df$isDefault[row.v]==1) {
+    test500.5$isDefault[i] <- 1
+  } else {
+    test500.5$isDefault[i] <- 0
+  }
+}
+
+```
+
+
+
+# Parametric VaR
+
+```{r}
+library(ggplot2)
+
+## ONE YEAR LOSSES
+
+firstloss.1 <- rep(0,10000)
+loss.var95.1 <- rep(0,10000)
+loss.var99.1 <- rep(0,10000)
+
+set.seed(1)
+
+# Simulation
+for (i in 1:10000) {
+  r.prob <- runif(1,0,1)
+  
+  def.events <- rep(0, nrow(def.probs.1))
+  def.events <- ifelse(def.probs.1$Prob1yr>=r.prob,1,0)
+  
+  if (sum(def.events)==0) {
+    firstloss.1[i] <- -1
+  } else {
+    def.loss <- test.loss.1 * test500.1$GrossApproval * def.events
+  
+    def.total.loss <- sum(def.loss)
+    firstloss.1[i] <- def.total.loss
+  
+  }
+
+}
+
+# Create loss matrix
+nvals.1 <- firstloss.1[firstloss.1>-1]
+loss.matrix.1 <- matrix(nrow=10000, ncol=length(nvals.1))
+
+# Plot losses
+ls.1 <- ggplot() + geom_density(mapping=aes(x=nvals.1)) + ggtitle("Parametric one year losses") + xlab("Losses") + ylab("Density")
+ls.1
+ggsave("par_loss_1.png", ls.1)
+
+maxloss <- sum(test500.1$GrossApproval)
+
+# Bootstrapping simulated values
+for (i in 1:10000) {
+  boot.loss.inds <- sample(1:length(nvals.1), length(nvals.1), replace=TRUE)
+  boot.loss <- nvals.1[boot.loss.inds]
+
+  
+  loss.matrix.1[i,] <- boot.loss
+  
+  # Calculating VaR
+  loss.var95.1[i] <- quantile(boot.loss, probs=seq(0.95), na.rm=TRUE)
+  loss.var99.1[i] <- quantile(boot.loss, probs=seq(0.99), na.rm=TRUE)
+ 
+}
+
+
+# Plot VaR Values
+pl.95.1 <- ggplot() + geom_density(mapping=aes(x=(loss.var95.1/maxloss))) + xlab("VaR") + ylab("Density") + ggtitle("Parametric 1-year VaR (95%)")
+pl.95.1
+ggsave("par_var_195.png", pl.95.1)
+pl.99.1 <- ggplot() + geom_density(mapping=aes(x=(loss.var99.1/maxloss))) + xlab("VaR") + ylab("Density") + ggtitle("Parametric 1-year VaR (99%)")
+pl.99.1
+ggsave("par_var_199.png", pl.99.1)
+
+
+# AVaR & Confidence intervals
+avar.95.1 <- mean(loss.var95.1/maxloss)
+var.95.1.sd <- sd(loss.var95.1/maxloss)
+var.95.1.ci <- c(avar.95.1-1.96*var.95.1.sd, avar.95.1+1.96*var.95.1.sd)
+
+avar.99.1 <- mean(loss.var99.1/maxloss)
+var.99.1.sd <- sd(loss.var99.1/maxloss)
+var.99.1.ci <- c(avar.99.1-2.57*var.99.1.sd, avar.99.1+2.57*var.99.1.sd)
+
+
+
+# Tranches
+lossvector.1 <- as.vector(loss.matrix.1)
+
+thresh5.1 <- 0.05*maxloss
+thresh15.1 <- 0.15*maxloss
+
+junior.tranche.1 <- rep(0, length(lossvector.1))
+senior.tranche.1 <- rep(0, length(lossvector.1))
+
+for (i in 1:length(lossvector.1)) {
+  junior.tranche.1[i] <- ifelse(lossvector.1[i] > thresh5.1, min(100, 100*((lossvector.1[i]-thresh5.1)/(thresh15.1-thresh5.1))), 0)
+  
+  senior.tranche.1[i] <- ifelse(lossvector.1[i] > thresh15.1, min(100, 100*((lossvector.1[i]-thresh15.1)/(maxloss-thresh15.1))), 0)
+}
+
+tranche.plot.1 <- ggplot() + stat_ecdf(mapping=aes(x=junior.tranche.1, color="junior tranche")) + stat_ecdf(mapping=aes(x=senior.tranche.1, color="senior tranche")) + xlab("Tranche P&L (%)") + ylab("Cumulative Distribution") + ggtitle("1 Year Parametric Tranche")
+
+tranche.plot.1
+ggsave("par_tranche_1.png", tranche.plot.1)
+
+
+## FIVE YEAR LOSSES
+
+firstloss.5 <- rep(0,10000)
+loss.var95.5 <- rep(0,10000)
+loss.var99.5 <- rep(0,10000)
+
+# Simulate defaults
+for (i in 1:10000) {
+  r.prob <- runif(1,0,1)
+  
+  def.events <- ifelse(def.probs$Prob5yr>=r.prob,1,0)
+  def.loss <- test.loss.1 * test500.5$GrossApproval * def.events
+  
+  if (sum(def.events)==0) {
+    firstloss.5[i] <- -1
+  } else {
+    def.total.loss <- sum(def.loss)
+    firstloss.5[i] <- def.total.loss
+  }
+  
+}
+
+# Create loss matrix
+nvals.5 <- firstloss.5[firstloss.5>-1]
+loss.matrix.5 <- matrix(nrow=10000, ncol=length(nvals.5))
+
+# Plot losses
+ls.5 <- ggplot() + geom_density(mapping=aes(x=nvals.5)) + xlab("Losses") + ylab("Density") + ggtitle("Parametric 5-year Losses (95%)")
+ls.5
+ggsave("par_loss_5.png", ls.5)
+
+# Bootstrapping
+for (i in 1:10000) {
+  boot.loss.inds <- sample(1:length(nvals.5), length(nvals.5), replace=TRUE)
+  boot.loss <- nvals.5[boot.loss.inds]
+  
+  loss.matrix.5[i,] <- boot.loss
+  
+  # Calculating VaR
+  loss.var95.5[i] <- quantile(boot.loss, probs=0.95,na.rm=TRUE)
+  loss.var99.5[i] <- quantile(boot.loss, probs=0.99,na.rm=TRUE)
+}
+
+# Plot VaR curves
+pl.95.5 <- ggplot() + geom_density(mapping=aes(x=(loss.var95.5/maxloss))) + xlab("VaR") + ylab("Density") + ggtitle("Parametric 5-year VaR (95%)")
+pl.95.5
+ggsave("par_var_595.png", pl.95.5)
+
+pl.99.5 <- ggplot() + geom_density(mapping=aes(x=(loss.var99.5/maxloss))) + xlab("VaR") + ylab("Density") + ggtitle("Parametric 5-year VaR (99%)") 
+pl.99.5
+ggsave("par_var_599.png", pl.99.5)
+
+
+# AVaR & Confidence intervals
+avar.95.5 <- mean(loss.var95.5/maxloss)
+var.95.5.sd <- sd(loss.var95.5/maxloss)
+var.95.5.ci <- c(avar.95.5-1.96*var.95.5.sd, avar.95.5+1.96*var.95.5.sd)
+
+avar.99.5 <- mean(loss.var99.5/maxloss)
+var.99.5.sd <- sd(loss.var99.5/maxloss)
+var.99.5.ci <- c(avar.99.5-2.57*var.99.5.sd, avar.99.5+2.57*var.99.5.sd)
+
+
+
+# Tranches
+maxloss <- sum(test500.5$GrossApproval)
+
+lossvector.5 <- as.vector(loss.matrix.5)
+
+thresh5.5 <- 0.05*maxloss
+thresh15.5 <- 0.15*maxloss
+
+junior.tranche.5 <- rep(0, length(lossvector.5))
+senior.tranche.5 <- rep(0, length(lossvector.5))
+
+for (i in 1:length(lossvector.5)) {
+  junior.tranche.5[i] <- ifelse(lossvector.5[i] > thresh5.5, min(100, 100*((lossvector.5[i]-thresh5.5)/(thresh15.5-thresh5.5))), 0)
+  
+  senior.tranche.5[i] <- ifelse(lossvector.5[i] > thresh15.5, min(100, 100*((lossvector.5[i]-thresh15.5)/(maxloss-thresh15.5))), 0)
+}
+
+
+tranche.plot.5 <- ggplot() + stat_ecdf(mapping=aes(x=junior.tranche.5, color="junior tranche")) + stat_ecdf(mapping=aes(x=senior.tranche.5, color="senior tranche")) + xlab("Tranche P&L (%)") + ylab("Cumulative Distribution") + ggtitle("5 Year Parametric Tranche")
+
+tranche.plot.5
+ggsave("par_tranche_5.png", tranche.plot.5)
+
+```
+
+
+# Non-parametric VaR
+
+```{r}
+## ONE YEAR LOSSES
+
+np.firstloss.1 <- rep(0,10000)
+np.loss.var95.1 <- rep(0,10000)
+np.loss.var99.1 <- rep(0,10000)
+
+set.seed(1)
+
+# Simulation
+for (i in 1:10000) {
+  r.prob <- runif(1,0,1)
+  
+  def.events <- rep(0, nrow(def.probs.1))
+  def.events <- ifelse(def.probs.1$Prob1yr>=r.prob,1,0)
+  
+  if (sum(def.events)==0) {
+    np.firstloss.1[i] <- -1
+  } else {
+    def.loss <- test500.1$GrossChargeOffAmount * def.events
+  
+    def.total.loss <- sum(def.loss)
+    np.firstloss.1[i] <- def.total.loss
+  }
+  
+}
+
+# Create loss matrix
+np.nvals.1 <- np.firstloss.1[np.firstloss.1>-1]
+np.loss.matrix.1 <- matrix(nrow=10000, ncol=length(np.nvals.1))
+
+# Plot losses
+np.ls.1 <- ggplot() + geom_density(mapping=aes(x=np.nvals.1)) + xlab("Losses") + ylab("Density") + ggtitle("Non-parametric 1-year Losses")
+np.ls.1
+ggsave("np_loss_1.png", np.ls.1)
+
+
+# Bootstrapping simulated values
+for (i in 1:10000) {
+  boot.loss.inds <- sample(1:length(np.nvals.1), length(np.nvals.1), replace=TRUE)
+  boot.loss <- np.nvals.1[boot.loss.inds]
+
+  
+  np.loss.matrix.1[i,] <- boot.loss
+  
+  # Calculating VaR
+  np.loss.var95.1[i] <- quantile(boot.loss, probs=seq(0.95), na.rm=TRUE)
+  np.loss.var99.1[i] <- quantile(boot.loss, probs=seq(0.99), na.rm=TRUE)
+ 
+}
+
+
+# Plot VaR Values
+np.pl.95.1 <- ggplot() + geom_density(mapping=aes(x=(np.loss.var95.1/maxloss))) + xlab("VaR") + ylab("Density") + ggtitle("Non-parametric 1-year VaR (95%)")
+np.pl.95.1
+ggsave("np_var_195.png", np.pl.95.1)
+
+np.pl.99.1 <- ggplot() + geom_density(mapping=aes(x=(np.loss.var99.1/maxloss))) + xlab("VaR") + ylab("Density") + ggtitle("Non-parametric 1-year VaR (99%)")
+np.pl.99.1
+ggsave("np_var_199.png", np.pl.99.1)
+
+
+# AVaR & Confidence intervals
+np.avar.95.1 <- mean(np.loss.var95.1/maxloss)
+np.var.95.1.sd <- sd(np.loss.var95.1/maxloss)
+np.var.95.1.ci <- c(np.avar.95.1-1.96*np.var.95.1.sd, np.avar.95.1+1.96*np.var.95.1.sd)
+
+np.avar.99.1 <- mean(np.loss.var99.1/maxloss)
+np.var.99.1.sd <- sd(np.loss.var99.1/maxloss)
+np.var.99.1.ci <- c(np.avar.99.1-2.57*np.var.99.1.sd, np.avar.99.1+2.57*np.var.99.1.sd)
+
+
+
+
+# Tranches
+np.lossvector.1 <- as.vector(np.loss.matrix.1)
+
+np.thresh5.1 <- 0.05*maxloss
+np.thresh15.1 <- 0.15*maxloss
+
+np.junior.tranche.1 <- rep(0, length(np.lossvector.1))
+np.senior.tranche.1 <- rep(0, length(np.lossvector.1))
+
+for (i in 1:length(np.lossvector.1)) {
+  np.junior.tranche.1[i] <- ifelse(np.lossvector.1[i] > np.thresh5.1, min(100, 100*((np.lossvector.1[i]-np.thresh5.1)/(np.thresh15.1-np.thresh5.1))), 0)
+  
+  np.senior.tranche.1[i] <- ifelse(np.lossvector.1[i] > np.thresh15.1, min(100, 100*((np.lossvector.1[i]-np.thresh15.1)/(maxloss-np.thresh15.1))), 0)
+}
+
+
+np.tranche.plot.1 <- ggplot() + stat_ecdf(mapping=aes(x=np.junior.tranche.1, color="junior tranche")) + stat_ecdf(mapping=aes(x=np.senior.tranche.1, color="senior tranche")) + xlab("Tranche P&L (%)") + ylab("Cumulative Distribution") + ggtitle("1 Year Non-parametric Tranche")
+
+np.tranche.plot.1
+ggsave("np_tranche_1.png", np.tranche.plot.1)
+
+
+## FIVE YEAR LOSSES
+
+np.firstloss.5 <- rep(0,10000)
+np.loss.var95.5 <- rep(0,1000)
+np.loss.var99.5 <- rep(0,1000)
+
+# Simulate defaults
+for (i in 1:10000) {
+  r.prob <- runif(1,0,1)
+  
+  def.events <- ifelse(def.probs$Prob5yr>=r.prob,1,0)
+  def.loss <- test500.5$GrossChargeOffAmount * def.events
+  
+  if (sum(def.events)==0) {
+    np.firstloss.5[i] <- -1
+  } else {
+    def.total.loss <- sum(def.loss)
+    np.firstloss.5[i] <- def.total.loss
+  }
+  
+}
+
+# Create loss matrix
+np.nvals.5 <- np.firstloss.5[np.firstloss.5>-1]
+np.loss.matrix.5 <- matrix(nrow=10000, ncol=length(np.nvals.5))
+
+# Plot losses
+np.ls.5 <- ggplot() + geom_density(mapping=aes(x=np.nvals.5)) + xlab("Losses") + ylab("Density") + ggtitle("Non-parametric 5-year Losses")
+np.ls.5
+ggsave("np_loss_5.png", np.ls.5)
+
+# Bootstrapping
+for (i in 1:10000) {
+  boot.loss.inds <- sample(1:length(np.nvals.5), length(np.nvals.5), replace=TRUE)
+  boot.loss <- np.nvals.5[boot.loss.inds]
+  
+  np.loss.matrix.5[i,] <- boot.loss
+  
+  # Calculating VaR
+  np.loss.var95.5[i] <- quantile(boot.loss, probs=0.95,na.rm=TRUE)
+  np.loss.var99.5[i] <- quantile(boot.loss, probs=0.99,na.rm=TRUE)
+}
+
+# Plot VaR curves
+np.pl.95.5 <- ggplot() + geom_density(mapping=aes(x=(np.loss.var95.5/maxloss)))+ xlab("VaR") + ylab("Density") + ggtitle("Non-parametric 5-year VaR (95%)")
+np.pl.95.5
+ggsave("np_var_595.png", np.pl.95.5)
+
+np.pl.99.5 <- ggplot() + geom_density(mapping=aes(x=(np.loss.var99.5/maxloss))) + xlab("VaR") + ylab("Density") + ggtitle("Non-parametric 5-year VaR (99%)") 
+np.pl.99.5
+ggsave("np_var_599.png", np.pl.99.5)
+
+
+# AVaR & Confidence intervals
+np.avar.95.5 <- mean(np.loss.var95.5/maxloss)
+np.var.95.5.sd <- sd(np.loss.var95.5/maxloss)
+np.var.95.5.ci <- c(np.avar.95.5-1.96*np.var.95.5.sd, np.avar.95.5+1.96*np.var.95.5.sd)
+
+np.avar.99.5 <- mean(np.loss.var99.5/maxloss)
+np.var.99.5.sd <- sd(np.loss.var99.5/maxloss)
+np.var.99.5.ci <- c(np.avar.99.5-2.57*np.var.99.5.sd, np.avar.99.5+2.57*np.var.99.5.sd)
+
+
+
+# Tranches
+np.lossvector.5 <- as.vector(np.loss.matrix.5)
+
+np.thresh5.5 <- 0.05*maxloss
+np.thresh15.5 <- 0.15*maxloss
+
+np.junior.tranche.5 <- rep(0, length(np.lossvector.5))
+np.senior.tranche.5 <- rep(0, length(np.lossvector.5))
+
+for(i in 1:length(np.lossvector.5)) {
+  np.junior.tranche.5[i] <- ifelse(np.lossvector.5[i] > np.thresh5.5, min(100, 100*((np.lossvector.5[i]-np.thresh5.5)/(np.thresh15.5-np.thresh5.5))), 0)
+  
+  np.senior.tranche.5[i] <- ifelse(np.lossvector.5[i] > np.thresh15.5, min(100, 100*((np.lossvector.5[i]-np.thresh15.5)/(maxloss-np.thresh15.5))), 0)
+}
+
+np.tranche.plot.5 <- ggplot() + stat_ecdf(mapping=aes(x=np.junior.tranche.5, color="junior tranche")) + stat_ecdf(mapping=aes(x=np.senior.tranche.5, color="senior tranche")) + xlab("Tranche P&L (%)") + ylab("Cumulative Distribution") + ggtitle("5 Year Non-parametric Tranche")
+
+np.tranche.plot.5
+
+ggsave("np_tranche_5.png", np.tranche.plot.5)
+
+```
