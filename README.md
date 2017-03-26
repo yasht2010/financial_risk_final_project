@@ -17,6 +17,3 @@
 
 • Finally, estimate the distributions for the one and five year losses of an investor who has bought a [5%,15%] tranche backed by the chosen portfolio. Also, consider a [15%, 100%] senior tranche. Interpret and compare the distributions from a risk management perspective. 
 
-References 
-
-1. https://www.math.ust.hk/~maykwok/courses/Risk_Mgmt/Risk_Topic_3.pdf
