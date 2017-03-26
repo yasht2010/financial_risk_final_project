@@ -1,0 +1,283 @@
+---
+title: "logistic regression"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(ROCR)
+library(glmnet)
+library(leaps)
+library(randomForest)
+```
+
+#Data Input
+
+```{r}
+set.seed(1)
+training_set = read.csv("training_set.csv")
+val_set = read.csv("validation_set.csv")
+test500_full = read.csv("test500_full (1).csv")
+test500_full$Naics2digits = as.factor(test500_full$Naics2digits)
+training_set$Naics2digits = as.factor(training_set$Naics2digits)
+val_set$Naics2digits = as.factor(val_set$Naics2digits)
+```
+
+#Filtering first year data
+
+``` {r}
+# filter first year
+training_set_1yr = filter(training_set, ApprovalFiscalYear == start)
+val_set_1yr = filter(val_set, ApprovalFiscalYear == start)
+
+# remove isDefault and rename Defaultyn as isDefault
+# because we only care about whether the loan defaulted, the time of default is not what we need to know
+drop = c("isDefault")
+training_set_1yr = training_set_1yr[, !(names(training_set_1yr) %in% drop)]
+colnames(training_set_1yr)[23] = "isDefault"
+val_set_1yr = val_set_1yr[, !(names(val_set_1yr) %in% drop)]
+colnames(val_set_1yr)[23] = "isDefault"
+# Change Naics2digits from numeric to factor
+training_set_1yr$Naics2digits = as.factor(training_set_1yr$Naics2digits)
+val_set_1yr$Naics2digits = as.factor(val_set_1yr$Naics2digits)
+```
+
+#Lasso for baseline
+
+```{r}
+lasso_training_1yr = training_set_1yr
+x.lasso = model.matrix(lasso_training_1yr$isDefault~GrossApproval+hpiState+unemploymentRate+interestRate+sandp500+NotSameState+BusinessType+DeliveryMethod+TermInMonths+ApprovalFiscalYear+BorrState+Naics2digits+gdpIndustry+tedSpread+ThirdPartyDollars, data = lasso_training_1yr)[,-1]
+lasso.mod = glmnet(x.lasso, lasso_training_1yr$isDefault, alpha = 1)
+cv.out = cv.glmnet(x.lasso, lasso_training_1yr$isDefault, alpha = 1)
+plot(cv.out)
+cv.out
+bestlam=cv.out$lambda.min
+predict(lasso.mod, s = cv.out$lambda.min, type = "coefficients")
+predict(lasso.mod, s = cv.out$lambda.1se, type = "coefficients")
+
+#no macro economic variables
+x.lasso_no_time = model.matrix(lasso_training_1yr$isDefault~GrossApproval+NotSameState+BusinessType+DeliveryMethod+TermInMonths+ApprovalFiscalYear+BorrState+Naics2digits+ThirdPartyDollars, data = lasso_training_1yr)[,-1]
+lasso.mod_no_time = glmnet(x.lasso_no_time, lasso_training_1yr$isDefault, alpha = 1)
+cv.out_no_time = cv.glmnet(x.lasso_no_time, lasso_training_1yr$isDefault, alpha = 1)
+plot(cv.out_no_time)
+cv.out_no_time
+bestlam=cv.out$lambda.min
+predict(lasso.mod_no_time, s = cv.out_no_time$lambda.min, type = "coefficients")
+predict(lasso.mod_no_time, s = cv.out_no_time$lambda.1se, type = "coefficients")
+```
+
+#Variable importance for baseline
+
+```{r}
+var_imp_1yr = training_set_1yr
+var_imp_1yr = filter(var_imp_1yr, CDC_State != "GU")
+var_imp_1yr = filter(var_imp_1yr, CDC_State != "PR")
+var_imp_1yr = filter(var_imp_1yr, CDC_State != "VI")
+var_imp_1yr = filter(var_imp_1yr, BorrState != "GU")
+var_imp_1yr = filter(var_imp_1yr, BorrState != "PR")
+var_imp_1yr = filter(var_imp_1yr, BorrState != "VI")
+var_imp_1yr = droplevels(var_imp_1yr)
+var_imp_1yr$isDefault = as.factor(var_imp_1yr$isDefault)
+var_imp_1yr$Naics2digits = as.factor(var_imp_1yr$Naics2digits)
+rf.test_1yr =randomForest(isDefault~GrossApproval+hpiState+unemploymentRate+interestRate+sandp500+NotSameState+BusinessType+DeliveryMethod+TermInMonths+ApprovalFiscalYear+BorrState+Naics2digits+gdpIndustry+tedSpread+ThirdPartyDollars,data=var_imp_1yr,mtry = 4, importance = TRUE)
+importance(rf.test_1yr)
+varImpPlot(rf.test_1yr,type=2)
+
+rf.test_no_time =randomForest(isDefault~GrossApproval+NotSameState+BusinessType+DeliveryMethod+TermInMonths+ApprovalFiscalYear+BorrState+Naics2digits+ThirdPartyDollars,data=var_imp_1yr,mtry = 3, importance = TRUE)
+importance(rf.test_no_time)
+varImpPlot(rf.test_no_time,type=2)
+```
+
+#Baseline with macro economic variables at the time loan initiated
+
+```{r}
+
+log_reg_1yr = glm(isDefault ~ log(GrossApproval)+hpiState+unemploymentRate+interestRate+sandp500+NotSameState+BusinessType+DeliveryMethod+TermInMonths+ApprovalFiscalYear+BorrState+Naics2digits+gdpIndustry+tedSpread+ThirdPartyDollars,family="binomial",data=training_set_1yr)
+# val_set
+pred_log_reg_1yr=predict(log_reg_1yr,val_set_1yr,type="response")
+
+pred1yr = prediction(pred_log_reg_1yr, val_set_1yr$isDefault)
+perf1yr = performance(pred1yr, "tpr", "fpr")
+plot(perf1yr)
+auc1yr <- performance(pred1yr,measure = "auc")
+auc1yr <- auc1yr@y.values[[1]]
+auc1yr
+```
+
+#Baseline without macro economic variables at the time loan initiated
+
+```{r}
+df.lm = glm(isDefault~log(GrossApproval)+BorrState+DeliveryMethod+ApprovalFiscalYear+BusinessType+NotSameState+ThirdPartyDollars+Naics2digits, family="binomial",data=training_set_1yr)
+
+# val_set
+df.pred = predict(df.lm, val_set_1yr, type = "response")
+# ROC Curve
+df.pred.auc = prediction(df.pred, val_set_1yr$isDefault)
+perf.df = performance(df.pred.auc, "tpr", "fpr")
+plot(perf.df)
+auc.df <- performance(df.pred.auc,measure = "auc")
+auc.df <- auc.df@y.values[[1]]
+auc.df
+```
+
+#Lasso for logistic Regression
+
+```{r Logistic Regression}
+#Lasso
+lasso_training = training_set
+training_set$Naics2digits = as.factor(training_set$Naics2digits)
+x.lasso = model.matrix(training_set$isDefault~GrossApproval+hpiState+unemploymentRate+interestRate+sandp500+NotSameState+BusinessType+DeliveryMethod+TermInMonths+ApprovalFiscalYear+BorrState+CDC_State+Naics2digits+gdpIndustry, data = training_set)[,-1]
+
+lasso_training = filter(lasso_training, !is.na(unemploymentRate))
+lasso.mod = glmnet(x.lasso, lasso_training$isDefault, alpha = 1)
+cv.out = cv.glmnet(x.lasso, lasso_training$isDefault, alpha = 1)
+plot(cv.out)
+cv.out
+predict(lasso.mod, s = cv.out$lambda.min, type = "coefficients")
+predict(lasso.mod, s = cv.out$lambda.1se, type = "coefficients")
+```
+
+#vaiable importance for logistic regression model
+
+```{r}
+var_imp = training_set
+var_imp = filter(var_imp, CDC_State != "GU")
+var_imp = filter(var_imp, CDC_State != "PR")
+var_imp = filter(var_imp, CDC_State != "VI")
+var_imp = filter(var_imp, BorrState != "GU")
+var_imp = filter(var_imp, BorrState != "PR")
+var_imp = filter(var_imp, BorrState != "VI")
+var_imp = droplevels(var_imp)
+var_imp$isDefault = as.factor(var_imp$isDefault)
+var_imp$Naics2digits = as.factor(var_imp$Naics2digits)
+rf.test =randomForest(isDefault~GrossApproval+hpiState+unemploymentRate+interestRate+sandp500+NotSameState+BusinessType+DeliveryMethod+TermInMonths+ApprovalFiscalYear+BorrState+Naics2digits+gdpIndustry+tedSpread+ThirdPartyDollars,data=var_imp,mtry = 4, importance = TRUE)
+importance(rf.test)
+varImpPlot(rf.test,type=2)
+```
+
+#Model Construction
+
+```{r}
+log_reg=glm(isDefault ~ interestRate+ApprovalFiscalYear+gdpIndustry+
+              log(GrossApproval)+hpiState+unemploymentRate+
+              sandp500+NotSameState+Naics2digits+BorrState+tedSpread+ThirdPartyDollars
+            ,family="binomial",data=training_set)
+summary(log_reg)
+
+# prediction of val_set
+pred_log_reg=predict(log_reg,val_set,type="response")
+
+# find start and stop for each loan
+loan_indices <- as.data.frame(unique(val_set$loanNum))
+loan_indices$start <- 1
+loan_indices$stop <- 1
+colnames(loan_indices) <- c("loan_no","start","stop")
+l = 1
+
+for(i in 1:nrow(val_set)){
+  if(val_set$endIndicator[i]==1){
+    loan_indices$stop[l]=i
+    l=l+1
+    if(l<=nrow(loan_indices)){
+    loan_indices$start[l]=i+1
+    }
+  }
+}
+
+# survival probability of each loan in each year
+# probability p = a loan survived from the start to the year X
+# 1 - p = probability that a loan defaulted at some point between start and X
+pred_test <- rep(0,length(pred_log_reg))
+counter = 1
+
+for(i in 1:nrow(loan_indices))
+{
+  a = loan_indices$start[i]
+  b = loan_indices$stop[i]
+  for(j in a:b){
+    if(j==a){
+      pred_test[a]=pred_log_reg[a]
+    }
+    else{
+      for(k in a:j){
+        counter = counter*(1-pred_log_reg[k])
+      }
+       pred_test[j]=1-counter
+    }
+    counter = 1
+  }
+}
+
+#ROC Curve
+pred1 = prediction(pred_test, val_set$isDefault)
+perf1 = performance(pred1, "tpr", "fpr")
+plot(perf1, col = "black")
+auc1 <- performance(pred1,measure = "auc")
+auc1 <- auc1@y.values[[1]]
+auc1
+
+plot(perf1yr, add = T, col = "red")
+plot(perf.df, add = T, col = "blue")
+legend("bottomright", legend = c("discretized data", "fixed 1-year macro economic variables", "no macro economic variables"), col = c("black", "red", "blue"), lty = 1, cex = 0.8)
+```
+
+#Logistic Regression on test 500 dataset
+
+```{r}
+# prediction of val_set
+pred_log_reg=predict(log_reg,test500_full,type="response")
+
+# find start and stop for each loan
+loan_indices <- as.data.frame(unique(val_set$loanNum))
+loan_indices$start <- 1
+loan_indices$stop <- 1
+colnames(loan_indices) <- c("loan_no","start","stop")
+l = 1
+
+for(i in 1:nrow(val_set)){
+  if(val_set$endIndicator[i]==1){
+    loan_indices$stop[l]=i
+    l=l+1
+    if(l<=nrow(loan_indices)){
+    loan_indices$start[l]=i+1
+    }
+  }
+}
+
+# survival probability of each loan in each year
+# probability p = a loan survived from the start to the year X
+# 1 - p = probability that a loan defaulted at some point between start and X
+
+pred_test <- rep(0,length(pred_log_reg))
+counter = 1
+
+for(i in 1:nrow(loan_indices))
+{
+  a = loan_indices$start[i]
+  b = loan_indices$stop[i]
+  for(j in a:b){
+    if(j==a){
+      pred_test[a]=pred_log_reg[a]
+    }
+    else{
+      for(k in a:j){
+        counter = counter*(1-pred_log_reg[k])
+      }
+       pred_test[j]=1-counter
+    }
+    counter = 1
+  }
+}
+
+#ROC Curve
+pred1 = prediction(pred_test, val_set$isDefault)
+perf1 = performance(pred1, "tpr", "fpr")
+plot(perf1)
+auc1 <- performance(pred1,measure = "auc")
+auc1 <- auc1@y.values[[1]]
+auc1
+```

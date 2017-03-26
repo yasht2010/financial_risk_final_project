@@ -1,0 +1,224 @@
+---
+title: "logistic regression"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Read the datasets
+
+Read the training, validation and test data via this code
+
+```{r}
+library(dplyr)
+library(ROCR)
+library(glmnet)
+
+## LOGISTIC REGRESSION
+## LOGISTIC REGRESSION
+
+# Constructing Model
+set.seed(1)
+training_set = read.csv("training_set.csv")
+valid_set = read.csv("validation_set.csv")
+test500_set = read.csv("test500_full.csv")
+test_set = read.csv("test500_set.csv")
+
+# Check for NAs. Note that SBLR might contain NAs but we don't include it
+# in our analysis
+
+checkNAs= sum(is.na(training_set))+sum(is.na(valid_set))+
+  sum(is.na(test_set))+sum(is.na(test500_set))
+checkNAs
+
+# Convert Naics2digits to factor
+training_set$Naics2digits <- as.factor(training_set$Naics2digits)
+valid_set$Naics2digits <- as.factor(valid_set$Naics2digits)
+test_set$Naics2digits <- as.factor(test_set$Naics2digits)
+test500_set$Naics2digits <- as.factor(test500_set$Naics2digits)
+
+# Check for NAs. Note that SBLR might contain NAs but we don't include it
+# in our analysis
+checkNAs= sum(is.na(training_set))+sum(is.na(valid_set))+
+  sum(is.na(test_set))+sum(is.na(test500_set))
+checkNAs
+```
+
+
+```{r}
+# Lasso
+lasso_training = training_set
+
+training_set$Naics2digits = as.factor(training_set$Naics2digits)
+x.lasso = model.matrix(training_set$isDefault~log(GrossApproval)+hpiState+ThirdPartyDollars+
+                         unemploymentRate+interestRate+sandp500+tedSpread+
+                         NotSameState+BusinessType+DeliveryMethod+
+                         TermInMonths+ApprovalFiscalYear+BorrState+
+                         CDC_State+Naics2digits+gdpIndustry, data = training_set)[,-1]
+cv.out = cv.glmnet(x.lasso, lasso_training$isDefault, alpha = 1,family = "binomial")
+plot(cv.out)
+cv.out
+plot(cv.out,xvar = "lambda" )
+title("%dev vs. log(Lambda) curve using Cross-Validation", line = 2.75)
+# interestRate, ApprovalFiscalYear
+predict(cv.out, s = cv.out$lambda.1se, type = "coefficients")
+predict(cv.out, s = cv.out$lambda.min, type = "coefficients")
+
+# Variable Importance Plot
+
+test_filter <- test_set
+test_filter <- droplevels(test_filter)
+test_filter$isDefault <- as.factor(test_filter$isDefault)
+install.packages("randomForest")
+library(randomForest)
+rf.test = randomForest(isDefault ~ GrossApproval+hpiState+ThirdPartyDollars+
+                         unemploymentRate+interestRate+sandp500+tedSpread+
+                         NotSameState+BusinessType+DeliveryMethod+
+                         TermInMonths+ApprovalFiscalYear+BorrState+
+                         CDC_State+Naics2digits+gdpIndustry,data=test_filter,
+                       mtry = 4, importance = TRUE)
+importance(rf.test)
+levels(training_set$BorrState)
+varImpPlot(rf.test,type=2,main = "Variable Importance Plot")
+abline(v = 6, untf = FALSE,lty = "dashed")
+
+```
+
+# Fixed Test Dataset
+
+```{r}
+testFix500_set = test500_set 
+
+testSetRows = nrow(testFix500_set)
+
+for(i in 1:testSetRows){
+  if(i%%5==1){
+    tempRow = testFix500_set[i,5:10]
+  }
+  else{
+    testFix500_set[i,5:10]=tempRow
+  }
+} 
+```
+
+# Logistic Regression Model
+
+
+```{r}
+# Model Logistic with correct variables and time varying model
+log_reg=glm(isDefault ~ interestRate+gdpIndustry+unemploymentRate+
+              ApprovalFiscalYear+hpiState+tedSpread+sandp500+ThirdPartyDollars+
+              log(GrossApproval)+NotSameState+Naics2digits+BorrState
+            ,family="binomial",data=training_set)
+summary(log_reg)
+```
+
+# Set the dataset for AUC calculation
+
+```{r}
+checkNAs= sum(is.na(training_set))+sum(is.na(valid_set))+
+  sum(is.na(test_set))+sum(is.na(test500_set))
+checkNAs
+dataset = test500_set
+```
+
+# AUC Computation
+
+```{r}
+#predict of test_set w/o splitting time periods
+pred_log_reg=predict(log_reg,dataset,type="response")
+log_reg_predict_values = c(rep(0,nrow(dataset)))
+log_reg_predict_values[pred_log_reg>0.07] <-1 
+table(log_reg_predict_values, dataset$isDefault)
+
+pred = prediction(pred_log_reg, dataset$isDefault)
+auc1 <- performance(pred,measure = "auc")
+auc1 <- auc1@y.values[[1]]
+auc1
+
+# pred_log_reg - Conditional Prob of Default
+# testFix500_set = validation set
+
+loan_indices <- as.data.frame(unique(dataset$loanNum))
+loan_indices$start <- 1
+loan_indices$stop <- 1
+colnames(loan_indices) <- c("loan_no","start","stop")
+l = 1
+counter = 1
+
+if(nrow(dataset)==2500)
+{
+ for(i in 1:nrow(dataset)){
+  if(i%%5==0){
+    loan_indices$stop[l]=i
+    l=l+1
+    if(l<=nrow(loan_indices)){
+    loan_indices$start[l]=i+1
+    }
+  }
+} 
+}else{
+  # find start and stop for each loan
+for(i in 1:nrow(dataset)){
+  if(dataset$endIndicator[i]==1){
+    loan_indices$stop[l]=i
+    l=l+1
+    if(l<=nrow(loan_indices)){
+    loan_indices$start[l]=i+1
+    }
+  }
+}
+}
+
+
+pred_test <- rep(0,length(pred_log_reg))
+
+for(i in 1:nrow(loan_indices))
+{
+  a = loan_indices$start[i]
+  b = loan_indices$stop[i]
+  for(j in a:b){
+    if(j==a){
+      pred_test[a]=pred_log_reg[a]
+    }
+    else{
+      for(k in a:j){
+        counter = counter*(1-pred_log_reg[k])
+      }
+       pred_test[j]=1-counter
+    }
+    counter = 1
+  }
+}
+
+pred_test_val <- rep(0,length(pred_log_reg))
+pred_test_val[pred_test>0.9999999] <-1 
+table(pred_test_val,dataset$isDefault)
+
+#ROC Curve
+#does not work if no loans defaulted. Only works when there are two classes.
+pred1 = prediction(pred_test, dataset$isDefault)
+perf1 = performance(pred1, "tpr", "fpr")
+plot(perf1)
+auc1 <- performance(pred1,measure = "auc")
+auc1 <- auc1@y.values[[1]]
+auc1
+```
+
+# Finding the 1 year and 5 year probabilities
+
+```{r}
+loan_indices$Prob1yr <- 0
+loan_indices$Prob5yr <- 0
+
+for(i in 1:length(loan_indices)){
+  loan_indices$Prob1yr[i] = pred_test[loan_indices$start[i]]
+  loan_indices$Prob5yr[i] = pred_test[loan_indices$stop[i]]
+}
+loan_indices
+
+write.csv(loan_indices,"prob.csv")
+```
+

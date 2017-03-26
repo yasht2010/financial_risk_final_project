@@ -1,0 +1,185 @@
+---
+title: "Deep learning in H2O"
+output: pdf_document
+---
+
+# Initialise
+
+Initialise packages, server and parallelise the computation using nthreads
+
+```{r}
+install.packages("h2o")
+install.packages("zoo")
+install.packages("dplyr")
+install.packages("ROCR")
+
+library(h2o)
+library(zoo)
+library(dplyr)
+library(ROCR)
+
+rm(list = ls())
+localH2O <- h2o.init(nthreads = -1)
+```
+
+# Read files and clean them for run
+
+```{r}
+
+df.train.ts <- read.csv("training_set.csv")
+df.valid.ts <- read.csv("validation_set.csv")
+df.test.ts <- read.csv("test500_set.csv")
+
+set.seed(1)
+
+# Remove unimportant columns
+df.train.ts <- subset(df.train.ts, 
+                      select = -c(X,loanNum,start,stop,ApprovalDate,
+                                  Defaultyn,endIndicator))
+df.valid.ts <- subset(df.valid.ts, 
+                      select = -c(X,loanNum,start,stop,ApprovalDate,
+                                  Defaultyn,endIndicator))
+df.test.ts <- subset(df.test.ts, 
+                     select = -c(X,loanNum,start,stop,ApprovalDate,
+                                 Defaultyn,endIndicator))
+
+# Log transformation of grossapproval
+df.train.ts$GrossApproval <- log(df.train.ts$GrossApproval)
+df.valid.ts$GrossApproval <- log(df.valid.ts$GrossApproval)
+df.test.ts$GrossApproval <- log(df.test.ts$GrossApproval)
+
+# Convert NAICS2digits to factor
+df.train.ts$Naics2digits <- as.factor(df.train.ts$Naics2digits)
+df.valid.ts$Naics2digits <- as.factor(df.valid.ts$Naics2digits)
+df.test.ts$Naics2digits <- as.factor(df.test.ts$Naics2digits)
+
+# Set H2O objects
+train_h2o <- as.h2o(df.train.ts)
+valid_h2o <- as.h2o(df.valid.ts)
+test_h2o <- as.h2o(df.test.ts)
+
+# getting the column names for our DL model
+y <- "isDefault"
+x <- c("interestRate","gdpIndustry","unemploymentRate",
+         "ApprovalFiscalYear","hpiState","tedSpread","sandp500",
+       "ThirdPartyDollars","BorrState",
+         "GrossApproval","NotSameState","Naics2digits")
+
+train_h2o[,y] <- as.factor(train_h2o[,y])
+valid_h2o[,y] <- as.factor(valid_h2o[,y])
+test_h2o[,y] <- as.factor(test_h2o[,y])
+
+# Vector to store AUC for different model parameters
+auc_vec = rep(0,24)
+```
+
+# Deep Learning Model Run Parameters
+
+```{r}
+nodes = list(c(1), c(2),c(3),
+             c(4),c(5),c(10),
+             c(50),c(50,50,50),c(50,50,50,50,50),
+             c(50),c(50,50,50),c(50,50,50,50,50),
+             c(150),c(150,150,150),c(150,150,150,150,150),
+             c(150),c(150,150,150),c(150,150,150,150,150),
+             c(250),c(250,250,250),c(250,250,250,250,250),
+             c(250),c(250,250,250),c(250,250,250,250,250))
+
+act_func = list("RectifierWithDropout","RectifierWithDropout",
+                "RectifierWithDropout",
+                "RectifierWithDropout","RectifierWithDropout",
+                "RectifierWithDropout",
+                "RectifierWithDropout","RectifierWithDropout",
+                "RectifierWithDropout",
+                "Rectifier","Rectifier","Rectifier",
+                "RectifierWithDropout","RectifierWithDropout",
+                "RectifierWithDropout",
+                "Rectifier","Rectifier","Rectifier",
+                "RectifierWithDropout","RectifierWithDropout",
+                "RectifierWithDropout",
+                "Rectifier","Rectifier","Rectifier")
+```
+
+# Deep Learning Model Run Parameters
+
+```{r}
+
+for(case_no in 1:24)
+
+set.seed(1)
+# DL H2O package
+model <- h2o.deeplearning(x = x,  # column names for predictors
+                          y = y,   # column name for label
+                          training_frame = train_h2o, # train data in H2O format
+                          validation_frame = valid_h2o, # test data in H2O format
+                          distribution = "multinomial",
+                          activation = act_func[[case_no]], 
+                          hidden = nodes[[case_no]], 
+                          input_dropout_ratio = 0.2,
+                          epochs = 10) # number of iterations
+
+
+set.seed(1)
+pred <- h2o.predict(model, newdata = valid_h2o)
+pred_log_reg <- as.data.frame(pred)[,3]
+
+# Computation of Validation set AUC
+df.valid.ts <- read.csv("validation_set.csv")
+df.valid.ts$GrossApproval <- log(df.valid.ts$GrossApproval)
+df.valid.ts$ThirdPartyDollars <- log(df.valid.ts$ThirdPartyDollars)
+df.valid.ts$hpiState <- log(df.valid.ts$hpiState)
+df.valid.ts$SBLR <- log(df.valid.ts$SBLR)
+
+loan_indices <- as.data.frame(unique(df.valid.ts$loanNum))
+loan_indices$start <- 1
+loan_indices$stop <- 1
+colnames(loan_indices) <- c("loan_no","start","stop")
+l = 1
+counter = 1
+
+# find start and stop for each loan
+for(i in 1:nrow(df.valid.ts)){
+  if(df.valid.ts$endIndicator[i]==1){
+    loan_indices$stop[l]=i
+    l=l+1
+    if(l<=nrow(loan_indices)){
+      loan_indices$start[l]=i+1
+    }
+  }
+}
+
+pred_test <- rep(0,length(pred_log_reg))
+
+for(i in 1:nrow(loan_indices))
+{
+  a = loan_indices$start[i]
+  b = loan_indices$stop[i]
+  for(j in a:b){
+    if(j==a){
+      pred_test[a]=pred_log_reg[a]
+    }
+    else{
+      for(k in a:j){
+        counter = counter*(1-pred_log_reg[k])
+      }
+      pred_test[j]=1-counter
+    }
+    counter = 1
+  }
+}
+
+
+#ROC Curve
+set.seed(1)
+#does not work if no loans defaulted. Only works when there are two classes.
+pred1 = prediction(pred_test, df.valid.ts$isDefault)
+perf1 = performance(pred1, "tpr", "fpr")
+plot(perf1)
+auc1 <- performance(pred1,measure = "auc")
+auc1 <- auc1@y.values[[1]]
+auc_vec[case_no] <- auc1 
+h2o.shutdown(prompt = FALSE)
+```
+
+
+

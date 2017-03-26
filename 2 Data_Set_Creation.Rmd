@@ -1,0 +1,155 @@
+---
+title: "Create 4 data sets"
+author: "Yash Tambawala"
+date: "March 15, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Read the files
+
+We read the discrete-time matrices and the original dataset
+
+```{r}
+finalMatrix <- read.csv("big_data_Matrix.csv")
+df <- read.csv("SBA_cleaned_data.csv")
+
+```
+
+
+# Split into training, validation and test set 
+
+
+```{r}
+library(dplyr)
+set.seed(1)
+
+filter500=filter(finalMatrix,TermInMonths>=60)
+loans_sampled_test=sample(filter500$loanNum[1]:filter500$loanNum[nrow(filter500)],500,replace=FALSE)
+
+loan_numbers=c(1:nrow(df))
+loan_numbers=loan_numbers[-loans_sampled_test]
+  
+training_set_loan_numbers = sample(loan_numbers,round(0.80*length(loan_numbers)),replace=FALSE)
+validation_set_loan_numbers= loan_numbers[-training_set_loan_numbers]
+
+training_set <-  finalMatrix[(finalMatrix$loanNum %in% training_set_loan_numbers),]
+validation_set <-  finalMatrix[(finalMatrix$loanNum %in% validation_set_loan_numbers),]
+test500_set <- finalMatrix[(finalMatrix$loanNum %in% loans_sampled_test),]
+
+# Store these data as numeric
+training_set$Defaultyn=as.numeric(as.character(training_set$Defaultyn))
+validation_set$Defaultyn=as.numeric(as.character(validation_set$Defaultyn))
+test500_set$Defaultyn=as.numeric(as.character(test500_set$Defaultyn))
+
+# Export file
+write.csv(training_set, file="training_set.csv", col.names=FALSE)
+write.csv(validation_set, file="validation_set.csv", col.names=FALSE)
+write.csv(test500_set, file="test500_set.csv", col.names=FALSE)
+
+```
+
+
+# 500-test loan dataset
+
+We create a 500-test loan dataset from 1-5 year periods
+
+```{r}
+matrix_test2=matrix(0,nrow=0,ncol=24)
+  finalMatrix2=matrix(0,nrow=0,ncol=24)
+  tempRow2 = matrix(0,nrow=1,ncol=24)
+  
+  end_index=0
+  
+  x=c("loanNum","start","stop","interestRate","gdpIndustry","unemploymentRate","hpiState","tedSpread","sandp500", "BorrState","CDC_State","ThirdPartyDollars","GrossApproval","ApprovalDate","ApprovalFiscalYear","DeliveryMethod", "TermInMonths","BusinessType","NotSameState","SBLR","Naics2digits","Defaultyn","isDefault","endIndicator")
+  
+  colnames(matrix_test2)=x
+  
+  df_new=df[loans_sampled_test,]
+  
+  df_const2 <- as.matrix(subset(df_new,select = c(BorrState,CDC_State,ThirdPartyDollars,GrossApproval,
+                                             ApprovalDate,ApprovalFiscalYear,DeliveryMethod,
+                                          TermInMonths,BusinessType,NotSameState,SBLR,Naics2digits,isDefault)))
+  
+  
+  for (i in 1:nrow(df_new)) {
+    
+    start=df_new$ApprovalFiscalYear[i]
+    stop=df_new$ApprovalFiscalYear[i]+5
+    periods=length(start:stop)     
+    n=0
+    chargeoffyear=df_new$ApprovalFiscalYear[i]+round(df_new$dayselapsed[i]/365)
+    
+    unemployment_start_index=match(start,unemployment_data[1,])
+    unemployment_state_index=match(df_new$BorrState[i],unemployment_data[,3])
+    if(is.na(df$Naics2digits[i])|df$Naics2digits[i]==99){
+      GDP_NAICS_index=2
+    }
+    else{
+      GDP_NAICS_index=match(df$Naics2digits[i],GDPSectorData[,2])
+    }
+    HPI_start_index=match(interaction(df_new$BorrState[i],start),
+                          interaction(hpi_state$ProjectState, hpi_state$ApprovalFiscalYear))
+      for (j in 1:(stop-start)) { 
+        tempRow2 = matrix(0,nrow=1,ncol=24)
+        tempRow2[1,1]=i
+        tempRow2[1,2]=start+n
+        tempRow2[1,3]=start+n+1
+        tempRow2[1,4]=interest_rates[start-1990+j]
+        tempRow2[1,5]=GDPSectorData[GDP_NAICS_index,GDP_start_index+n]
+        tempRow2[1,6]=unemployment_data[unemployment_state_index,unemployment_start_index+n]
+        tempRow2[1,7]=hpi_state[HPI_start_index+n,3]
+        tempRow2[1,8]=TED[start-1990+j,2]
+        tempRow2[1,9]=SNP500[start-1990+j,1]
+        tempRow2[1,as.numeric(10:22)] = df_const2[i,]
+
+       if(df_new$isDefault[i]==1){
+        if((start+n)==chargeoffyear){tempRow2[1,23]=1
+         tempRow2[1,24]=1}
+        }
+        n=n+1 
+        matrix_test2 <- rbind(matrix_test2,tempRow2)
+      }
+  }
+  colnames(matrix_test2)=x
+  test500_full <- matrix_test2
+  test500_full <- as.data.frame(matrix_test2)
+
+# Store these data as numeric
+test500_full$start <- as.numeric(as.character(test500_full$start))
+test500_full$stop <- as.numeric(as.character(test500_full$stop))
+test500_full$isDefault <- as.numeric(as.character(test500_full$isDefault))
+test500_full$GrossApproval <- as.numeric(as.character(test500_full$GrossApproval))
+test500_full$unemploymentRate <- as.numeric(as.character(test500_full$unemploymentRate))
+test500_full$interestRate <- as.numeric(as.character(test500_full$interestRate))
+test500_full$hpiState <- as.numeric(as.character(test500_full$hpiState))
+test500_full$TermInMonths <- as.numeric(as.character(test500_full$TermInMonths))
+test500_full$SBLR <- as.numeric(as.character(test500_full$SBLR))
+test500_full$tedSpread <-as.numeric(as.character(test500_full$tedSpread))
+test500_full$sandp500 <- as.numeric(as.character(test500_full$sandp500))
+test500_full$loanNum <- as.numeric(as.character(test500_full$loanNum))
+
+#Store as factor
+test500_full$interestRate <- (as.factor(test500_full$interestRate))
+
+# Replace NAs in ThirdPArtyDollars with 0
+test500_full$ThirdPartyDollars <- as.numeric(as.character(test500_full$ThirdPartyDollars))
+test500_full$ThirdPartyDollars[is.na(test500_full$ThirdPartyDollars)]<- 0
+
+# Replace NAs in Naics2digits with 0
+test500_full$Naics2digits <- as.numeric(as.character(test500_full$Naics2digits))
+test500_full$Naics2digits[is.na(test500_full$Naics2digits)]<- 0
+test500_full$Naics2digits <- as.factor(test500_full$Naics2digits)
+
+# Replace NAs in Naics2digits with 0.13, corresponding to Year 2015
+test500_full$interestRate <- as.numeric(as.character(test500_full$interestRate))
+test500_full$interestRate[is.na(test500_full$interestRate)]<- 0.13
+test500_full$interestRate <- as.factor(test500_full$interestRate)
+  
+write.csv(test500_full, file="test500_full.csv", col.names=FALSE)
+```
+
+
