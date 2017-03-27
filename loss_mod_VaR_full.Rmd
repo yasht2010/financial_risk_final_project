@@ -229,7 +229,7 @@ nvals.1 <- firstloss.1[firstloss.1>-1]
 loss.matrix.1 <- matrix(nrow=10000, ncol=length(nvals.1))
 
 # Plot losses
-ls.1 <- ggplot() + geom_density(mapping=aes(x=nvals.1)) + ggtitle("Parametric one year losses") + xlab("Losses") + ylab("Density")
+ls.1 <- ggplot() + geom_density(mapping=aes(x=(nvals.1/10000000))) + ggtitle("Parametric one year losses") + xlab("Losses (Ten Million Dollars)") + ylab("Density")
 ls.1
 ggsave("par_loss_1.png", ls.1)
 
@@ -318,7 +318,7 @@ nvals.5 <- firstloss.5[firstloss.5>-1]
 loss.matrix.5 <- matrix(nrow=10000, ncol=length(nvals.5))
 
 # Plot losses
-ls.5 <- ggplot() + geom_density(mapping=aes(x=nvals.5)) + xlab("Losses") + ylab("Density") + ggtitle("Parametric 5-year Losses (95%)")
+ls.5 <- ggplot() + geom_density(mapping=aes(x=(nvals.5/10000000))) + xlab("Losses (Ten Million Dollars)") + ylab("Density") + ggtitle("Parametric 5-year Losses (95%)")
 ls.5
 ggsave("par_loss_5.png", ls.5)
 
@@ -415,7 +415,7 @@ np.nvals.1 <- np.firstloss.1[np.firstloss.1>-1]
 np.loss.matrix.1 <- matrix(nrow=10000, ncol=length(np.nvals.1))
 
 # Plot losses
-np.ls.1 <- ggplot() + geom_density(mapping=aes(x=np.nvals.1)) + xlab("Losses") + ylab("Density") + ggtitle("Non-parametric 1-year Losses")
+np.ls.1 <- ggplot() + geom_density(mapping=aes(x=(np.nvals.1/10000000))) + xlab("Losses (Ten Million Dollars)") + ylab("Density") + ggtitle("Non-parametric 1-year Losses")
 np.ls.1
 ggsave("np_loss_1.png", np.ls.1)
 
@@ -506,7 +506,7 @@ np.nvals.5 <- np.firstloss.5[np.firstloss.5>-1]
 np.loss.matrix.5 <- matrix(nrow=10000, ncol=length(np.nvals.5))
 
 # Plot losses
-np.ls.5 <- ggplot() + geom_density(mapping=aes(x=np.nvals.5)) + xlab("Losses") + ylab("Density") + ggtitle("Non-parametric 5-year Losses")
+np.ls.5 <- ggplot() + geom_density(mapping=aes(x=(np.nvals.5/10000000))) + xlab("Losses (Ten Million Dollars)") + ylab("Density") + ggtitle("Non-parametric 5-year Losses")
 np.ls.5
 ggsave("np_loss_5.png", np.ls.5)
 
